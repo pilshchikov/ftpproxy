@@ -1,0 +1,16 @@
+version: '3'
+
+services:
+  proxy:
+    build:
+      dockerfile: $PWD/Dockerfile
+      context: .
+    image: "pilshchikov/ftpproxy:1.0"
+    ports:
+    - "9000:9000"
+    entrypoint:
+      - "address=1.1.1.1"
+      - "login=usr"
+      - "password=pwd"
+      - "storage=/your/path"
+      - "maxSize=10g"
