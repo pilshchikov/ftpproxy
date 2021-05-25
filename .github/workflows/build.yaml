@@ -24,7 +24,7 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
       - name: Push image
         run: |
-          FULL_IMAGE_NAME="docker.pkg.github.com/${{ github.repository }}:${{ github.event.inputs.version }}"
+          FULL_IMAGE_NAME="docker.pkg.github.com/${{ github.repository }}/ftpproxy:${{ github.event.inputs.version }}"
           echo "IMAGE_NAME=$FULL_IMAGE_NAME"
           docker tag $BUFFER_IMAGE_NAME $FULL_IMAGE_NAME
           docker push $FULL_IMAGE_NAME
