@@ -5,7 +5,7 @@ services:
     build:
       dockerfile: $PWD/Dockerfile
       context: .
-    image: "docker.pkg.github.com/pilshchikov/ftpproxy:0.1"
+    image: "docker.pkg.github.com/pilshchikov/ftpproxy/ftpproxy:0.1"
     ports:
       - "${PORT}:9000"
     volumes:
