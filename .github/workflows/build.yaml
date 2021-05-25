@@ -3,7 +3,7 @@ name: build
 on:
   workflow_dispatch:
     inputs:
-      verstion:
+      version:
         description: Image version
         default: '0.1'
         required: true
