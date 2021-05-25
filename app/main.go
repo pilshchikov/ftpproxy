@@ -15,19 +15,20 @@ import (
 	"time"
 )
 
-var storedFiles = sync.Map{}
+var cache = sync.Map{}
 var downloadFile = make(chan string)
 
 var address = os.Getenv("address")
 var login = os.Getenv("login")
 var password = os.Getenv("password")
+
 var storagePath = os.Getenv("storage")
 var maxSize = os.Getenv("maxSize")
 
 func processDownload(path string) string {
 	downloadFile <- path
 	for {
-		localFile, ok := storedFiles.Load(path)
+		localFile, ok := cache.Load(path)
 		if ok {
 			return localFile.(string)
 		}
@@ -42,10 +43,10 @@ func get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Println(fmt.Sprintf("?-> %s", path))
-	localFile, ok := storedFiles.Load(path)
+	localFile, ok := cache.Load(path)
 	if !ok || !fileExists(fmt.Sprintf("%s/%s", storagePath, localFile)) {
 		if ok {
-			storedFiles.Delete(localFile)
+			cache.Delete(localFile)
 		}
 		localFile = processDownload(path)
 	}
@@ -84,7 +85,7 @@ func download(path string) string {
 	}
 
 	log.Println(fmt.Sprintf("-> %s", path))
-	c, err := ftp.Dial(fmt.Sprintf("%s:21", address), ftp.DialWithTimeout(5*time.Second))
+	c, err := ftp.Dial(address, ftp.DialWithTimeout(5*time.Second))
 	handleErr(err, "connect")
 
 	err = c.Login(login, password)
@@ -101,7 +102,7 @@ func download(path string) string {
 	}
 
 	err = ioutil.WriteFile(localFilePath, buf, 0644)
-	storedFiles.Store(path, localFileName)
+	cache.Store(path, localFileName)
 
 	handleErr(err, fmt.Sprintf("save file %s", localFileName))
 	return localFileName
@@ -113,7 +114,7 @@ func scan() {
 	for _, file := range files {
 		realName, err := base64.StdEncoding.DecodeString(file.Name())
 		handleErr(err, "decode")
-		storedFiles.Store(string(realName), file.Name())
+		cache.Store(string(realName), file.Name())
 		log.Println(fmt.Sprintf("O-O %s %s", string(realName), file.Name()))
 	}
 }
@@ -126,14 +127,14 @@ func downloader() {
 			continue
 		}
 
-		_, ok := storedFiles.Load(toDownload)
+		_, ok := cache.Load(toDownload)
 		if !ok {
 			download(toDownload)
 		}
 	}
 }
 
-func storageIsHuge() bool {
+func storageIsOverfilled() bool {
 	var dirSize int64 = 0
 
 	readSize := func(path string, file os.FileInfo, err error) error {
@@ -164,31 +165,27 @@ func storageIsHuge() bool {
 
 func monitor() {
 	for {
+		if storageIsOverfilled() {
+			files, err := ioutil.ReadDir(storagePath)
+			handleErr(err, "scan dir monitor")
 
-		for {
-			if storageIsHuge() {
-				files, err := ioutil.ReadDir(storagePath)
-				handleErr(err, "scan dir monitor")
-
-				lowestModTime := time.Now()
-				var fileToDelete string
-				for _, file := range files {
-					if lowestModTime.After(file.ModTime()) {
-						fileToDelete = file.Name()
-						lowestModTime = file.ModTime()
-					}
+			lowestModTime := time.Now()
+			var fileToDelete string
+			for _, file := range files {
+				if lowestModTime.After(file.ModTime()) {
+					fileToDelete = file.Name()
+					lowestModTime = file.ModTime()
 				}
-
-				if fileToDelete != "" {
-					log.Println(fmt.Sprintf("remove %s", fileToDelete))
-					err := os.Remove(fmt.Sprintf("%s/%s", storagePath, fileToDelete))
-					handleErr(err, fmt.Sprintf("delete %s", fileToDelete))
-				}
-			} else {
-				time.Sleep(10 * time.Second)
 			}
-		}
 
+			if fileToDelete != "" {
+				log.Println(fmt.Sprintf("remove %s", fileToDelete))
+				err := os.Remove(fmt.Sprintf("%s/%s", storagePath, fileToDelete))
+				handleErr(err, fmt.Sprintf("delete %s", fileToDelete))
+			}
+		} else {
+			time.Sleep(10 * time.Second)
+		}
 	}
 }
 

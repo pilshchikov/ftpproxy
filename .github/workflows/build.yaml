@@ -1,0 +1,30 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      verstion:
+        description: Image version
+        default: '0.1'
+        required: true
+
+env:
+  BUFFER_IMAGE_NAME: buffer
+  IMAGE_NAME: ftpproxy
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build image
+        run: docker build -t $BUFFER_IMAGE_NAME -f Dockerfile .
+      - name: Log into registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login docker.pkg.github.com -u ${{ github.actor }} --password-stdin
+      - name: Push image
+        run: |
+          FULL_IMAGE_NAME="docker.pkg.github.com/${{ github.repository }}/$IMAGE_NAME:${{ github.event.inputs.name }}"
+          echo "IMAGE_NAME=$FULL_IMAGE_NAME"
+          docker tag $BUFFER_IMAGE_NAME $FULL_IMAGE_NAME
+          docker push $IMAGE_NAME
