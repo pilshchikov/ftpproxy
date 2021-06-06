@@ -5,14 +5,15 @@ services:
     build:
       dockerfile: $PWD/Dockerfile
       context: .
-    image: "docker.pkg.github.com/pilshchikov/ftpproxy/ftpproxy:0.1"
+    image: "docker.pkg.github.com/pilshchikov/ftpproxy/ftpproxy:0.2"
     ports:
       - "${PORT}:9000"
     volumes:
       - "${STORAGE_PATH}:/storage"
     entrypoint:
-      - "address=${ADDRESS}"
-      - "login=${LOGIN}"
-      - "password=${PASSWORD}"
-      - "storage=/storage"
-      - "maxSize=${MAX_SIZE}"
+      - "ADDRESS=${ADDRESS}"
+      - "LOGIN=${LOGIN}"
+      - "PASSWORD=${PASSWORD}"
+      - "STORAGE_PATH=/storage"
+      - "MAX_SIZE=${MAX_SIZE:-10g}"
+      - "ATTEMPTS_TO_RECONNECT=${ATTEMPTS_TO_RECONNECT:-10}"

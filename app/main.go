@@ -3,34 +3,31 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
-	"github.com/jlaffaye/ftp"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 var cache = sync.Map{}
-var downloadFile = make(chan string)
 
-var address = os.Getenv("address")
-var login = os.Getenv("login")
-var password = os.Getenv("password")
+var address = os.Getenv("ADDRESS")
+var login = os.Getenv("LOGIN")
+var password = os.Getenv("PASSWORD")
 
-var storagePath = os.Getenv("storage")
-var maxSize = os.Getenv("maxSize")
+var storagePath = os.Getenv("STORAGE_PATH")
+var maxSize = os.Getenv("MAX_SIZE")
+var attemptsToReconnect = os.Getenv("ATTEMPTS_TO_RECONNECT")
 
-func processDownload(path string) string {
-	downloadFile <- path
+func processDownload(path string) DownloadState {
+	downloadFileCh <- path
 	for {
 		localFile, ok := cache.Load(path)
 		if ok {
-			return localFile.(string)
+			return localFile.(DownloadState)
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -42,154 +39,54 @@ func get(w http.ResponseWriter, r *http.Request) {
 		path = r.Header.Get("path")
 	}
 
-	log.Println(fmt.Sprintf("?-> %s", path))
+	log.Println(fmt.Sprintf("<- %s", path))
 	localFile, ok := cache.Load(path)
 	if !ok || !fileExists(fmt.Sprintf("%s/%s", storagePath, localFile)) {
 		if ok {
 			cache.Delete(localFile)
 		}
-		localFile = processDownload(path)
+		downloadState := processDownload(path)
+		if downloadState.error != nil {
+			writeResponse(w, 500, downloadState.error.Error())
+			return
+		}
+		localFile = downloadState.localFilePath
 	}
 	rf, err := ioutil.ReadFile(fmt.Sprintf("%s/%s", storagePath, localFile))
-	handleErr(err, fmt.Sprintf("read %s", localFile))
+	if err != nil {
+		writeResponse(w, 500, fmt.Sprintf("Failed to read downloaded file: %s", err))
+		return
+	}
 
 	parts := strings.Split(path, "/")
-
 	w.Header().Add("Content-Disposition", fmt.Sprintf("attachment; filename=%s", parts[len(parts)-1]))
 
 	_, err = w.Write(rf)
-	handleErr(err, "write resp")
-}
-
-func handleErr(err error, message string) bool {
 	if err != nil {
-		log.Fatal(fmt.Sprintf("ERROR: %s %s", message, err))
-		return false
+		writeResponse(w, 500, fmt.Sprintf("Failed to write downloaded file: %s", err))
+		return
 	}
-	return true
-}
-
-func fileExists(path string) bool {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return false
-	}
-	return true
-}
-
-func download(path string) string {
-	localFileName := base64.StdEncoding.EncodeToString([]byte(path))
-	localFilePath := fmt.Sprintf("%s/%s", storagePath, localFileName)
-
-	if fileExists(localFilePath) {
-		return localFileName
-	}
-
-	log.Println(fmt.Sprintf("-> %s", path))
-	c, err := ftp.Dial(address, ftp.DialWithTimeout(5*time.Second))
-	handleErr(err, "connect")
-
-	err = c.Login(login, password)
-	handleErr(err, "login")
-
-	r, err := c.Retr(path)
-	handleErr(err, fmt.Sprintf("download %s", path))
-	defer r.Close()
-
-	buf, err := ioutil.ReadAll(r)
-
-	if fileExists(localFilePath) {
-		return localFileName
-	}
-
-	err = ioutil.WriteFile(localFilePath, buf, 0644)
-	cache.Store(path, localFileName)
-
-	handleErr(err, fmt.Sprintf("save file %s", localFileName))
-	return localFileName
 }
 
 func scan() {
+	log.Printf("Searching for existed files in %s", storagePath)
 	files, err := ioutil.ReadDir(storagePath)
-	handleErr(err, "scan dir")
+	if err != nil {
+		log.Fatalf("Failed to read previous files dir %s! reason: %s", storagePath, err)
+	}
 	for _, file := range files {
 		realName, err := base64.StdEncoding.DecodeString(file.Name())
-		handleErr(err, "decode")
+		if err != nil {
+			log.Fatalf("Failed to decode file %s! reason: %s", file.Name(), err)
+		}
 		cache.Store(string(realName), file.Name())
-		log.Println(fmt.Sprintf("O-O %s %s", string(realName), file.Name()))
+		log.Println(fmt.Sprintf("Found %s -> %s", string(realName), file.Name()))
 	}
-}
-
-func downloader() {
-	for {
-		toDownload, chOk := <-downloadFile
-		if !chOk {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		_, ok := cache.Load(toDownload)
-		if !ok {
-			download(toDownload)
-		}
-	}
-}
-
-func storageIsOverfilled() bool {
-	var dirSize int64 = 0
-
-	readSize := func(path string, file os.FileInfo, err error) error {
-		if !file.IsDir() {
-			dirSize += file.Size()
-		}
-
-		return nil
-	}
-
-	err := filepath.Walk(storagePath, readSize)
-	handleErr(err, "walk dir")
-
-	sizeMB := int(dirSize / 1024 / 1024)
-
-	more := false
-	sizeAmount, _ := strconv.Atoi(maxSize[:len(maxSize)-1])
-	sizeFormat := maxSize[len(maxSize)-1:]
-	if sizeFormat == "m" || sizeFormat == "M" {
-		more = sizeMB > sizeAmount
-	} else if sizeFormat == "g" || sizeFormat == "G" {
-		more = sizeMB/1024 > sizeAmount
-	}
-
-	return more
-
-}
-
-func monitor() {
-	for {
-		if storageIsOverfilled() {
-			files, err := ioutil.ReadDir(storagePath)
-			handleErr(err, "scan dir monitor")
-
-			lowestModTime := time.Now()
-			var fileToDelete string
-			for _, file := range files {
-				if lowestModTime.After(file.ModTime()) {
-					fileToDelete = file.Name()
-					lowestModTime = file.ModTime()
-				}
-			}
-
-			if fileToDelete != "" {
-				log.Println(fmt.Sprintf("remove %s", fileToDelete))
-				err := os.Remove(fmt.Sprintf("%s/%s", storagePath, fileToDelete))
-				handleErr(err, fmt.Sprintf("delete %s", fileToDelete))
-			}
-		} else {
-			time.Sleep(10 * time.Second)
-		}
-	}
+	log.Println("-----------------------------------")
 }
 
 func main() {
+	getMaxAttemptsCount()
 	scan()
 	go downloader()
 	go monitor()
